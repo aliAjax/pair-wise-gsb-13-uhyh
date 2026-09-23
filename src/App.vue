@@ -1,192 +1,30 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+/**
+ * 页面层：只做区块编排与展示。
+ * 数据见 src/data，判定见 src/domain，保存见 src/store。
+ */
+import { computed } from "vue";
+import { useDeskStore } from "./store/desk";
+import EventSetup from "./components/EventSetup.vue";
+import ManualDesk from "./components/ManualDesk.vue";
+import ReceiptMatch from "./components/ReceiptMatch.vue";
+import RecoveryShift from "./components/RecoveryShift.vue";
 
-type Field = {
-  key: string;
-  label: string;
-  type?: "number" | "date" | "select";
-  options?: readonly string[];
-};
-
-type RecordItem = {
-  id: string;
-  status: string;
-  notes: string;
-  createdAt: string;
-  [key: string]: string | number;
-};
-
-const project = {
-  "number": 7,
-  "folder": "dfwl/frontend/dfwlfront-7",
-  "framework": "vue",
-  "title": "加油站班次交接",
-  "subtitle": "录入油品销量和收款数据，自动计算当班总收入。",
-  "industry": "石油",
-  "stack": [
-    "Vue3",
-    "Vite",
-    "TypeScript",
-    "Element Plus"
-  ],
-  "storageKey": "dfwlfront-7-shift",
-  "formTitle": "新增交接记录",
-  "primaryAction": "保存交接",
-  "entityLabel": "班次",
-  "statuses": [
-    "待复核",
-    "已复核",
-    "有差异"
-  ],
-  "filters": [
-    "全部班次",
-    "早班",
-    "中班",
-    "晚班"
-  ],
-  "fields": [
-    {
-      "key": "shift",
-      "label": "班次",
-      "type": "select",
-      "options": [
-        "早班",
-        "中班",
-        "晚班"
-      ]
-    },
-    {
-      "key": "fuelSales",
-      "label": "油品销量L",
-      "type": "number"
-    },
-    {
-      "key": "cash",
-      "label": "现金收入",
-      "type": "number"
-    },
-    {
-      "key": "digital",
-      "label": "电子支付",
-      "type": "number"
-    }
-  ],
-  "records": [
-    {
-      "shift": "早班",
-      "fuelSales": 4280,
-      "cash": 8300,
-      "digital": 21000,
-      "status": "已复核",
-      "notes": "账实一致"
-    },
-    {
-      "shift": "中班",
-      "fuelSales": 3910,
-      "cash": 6400,
-      "digital": 19800,
-      "status": "待复核",
-      "notes": "等待站长确认"
-    }
-  ],
-  "metricLabels": [
-    "交接记录",
-    "已复核",
-    "总收入"
-  ]
-} as const;
-
-const fields = project.fields as readonly Field[];
-const statuses = [...project.statuses];
-
-function createBlank() {
-  return Object.fromEntries(fields.map((field) => [field.key, field.type === "number" ? 0 : ""]));
-}
-
-function loadRecords(): RecordItem[] {
-  const raw = localStorage.getItem(project.storageKey);
-  if (!raw) {
-    return project.records.map((record, index) => ({
-      ...record,
-      id: `seed-${index + 1}`,
-      createdAt: new Date(Date.now() - index * 86400000).toISOString()
-    })) as RecordItem[];
-  }
-  try {
-    return JSON.parse(raw) as RecordItem[];
-  } catch {
-    return [];
-  }
-}
-
-const records = ref<RecordItem[]>(loadRecords());
-const form = reactive<Record<string, string | number>>(createBlank());
-const note = ref("");
-const filter = ref(project.filters[0]);
-
-const filteredRecords = computed(() => {
-  if (filter.value.startsWith("全部")) return records.value;
-  return records.value.filter((record) => Object.values(record).includes(filter.value));
-});
+const store = useDeskStore();
 
 const metrics = computed(() => {
-  const total = records.value.length;
-  const second = records.value.filter((record) => record.status === statuses[1]).length;
-  const third = records.value.filter((record) => record.status === statuses[2]).length;
-  const numberValues = records.value.flatMap((record) =>
-    fields.filter((field) => field.type === "number").map((field) => Number(record[field.key] || 0))
-  );
-  const sum = numberValues.reduce((acc, value) => acc + value, 0);
-  return [total, second || sum, third || Math.round(sum / Math.max(total, 1))];
-});
-
-const chartRows = computed(() => statuses.map((status) => ({
-  status,
-  value: records.value.filter((record) => record.status === status).length
-})));
-
-const maxChart = computed(() => Math.max(1, ...chartRows.value.map((row) => row.value)));
-
-function persist() {
-  localStorage.setItem(project.storageKey, JSON.stringify(records.value));
-}
-
-function nextStatus(status: string) {
-  const index = statuses.indexOf(status);
-  return statuses[(index + 1) % statuses.length];
-}
-
-function primaryText(record: RecordItem) {
-  const first = fields[0];
-  const second = fields[1];
-  return [record[first.key], record[second.key]].filter(Boolean).join(" / ") || project.entityLabel;
-}
-
-function submit() {
-  records.value = [
-    {
-      ...form,
-      id: crypto.randomUUID(),
-      status: statuses[0],
-      notes: note.value || "暂无备注",
-      createdAt: new Date().toISOString()
-    } as RecordItem,
-    ...records.value
+  const s = store.summary;
+  if (!s) return [];
+  return [
+    { label: "纸单总数", value: s.total },
+    { label: "待补录", value: s.pending, warn: s.pending > 0 },
+    { label: "已核销", value: s.verified },
+    { label: "金额不符(禁核销)", value: s.diff, warn: s.diff > 0 },
+    { label: "未闭环", value: store.unfinished.length, warn: store.unfinished.length > 0 },
+    { label: "已核销升数(L)", value: s.liters.toFixed(2) },
+    { label: "已核销收款(元)", value: `¥${s.cash.toFixed(2)}` }
   ];
-  Object.assign(form, createBlank());
-  note.value = "";
-  persist();
-}
-
-function flow(record: RecordItem) {
-  record.status = nextStatus(record.status);
-  persist();
-}
-
-function remove(id: string) {
-  records.value = records.value.filter((record) => record.id !== id);
-  persist();
-}
+});
 </script>
 
 <template>
@@ -194,78 +32,84 @@ function remove(id: string) {
     <div class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">{{ project.industry }}行业前端最小闭环</p>
-          <h1>{{ project.title }}</h1>
-          <p class="subtitle">{{ project.subtitle }}</p>
+          <p class="eyebrow">石油行业 · 停电应急最小闭环</p>
+          <h1>停电应急加油台</h1>
+          <p class="subtitle">
+            台风夜停电后，纸单手工加油 → 复电后匹配终端小票核销 → 自检复位 → 恢复营业冻结；
+            金额不符不得核销，未处理完不能关班，下一班写原因承接，更正另建原因版本。
+          </p>
         </div>
         <div class="stack">
-          <span v-for="item in project.stack" :key="item" class="tag">{{ item }}</span>
+          <span class="tag">Vue3</span>
+          <span class="tag">TypeScript</span>
+          <span class="tag">数据/判定/保存/页面 分层</span>
+          <span class="tag">localStorage 留痕</span>
         </div>
       </header>
 
-      <section class="metrics">
-        <article v-for="(label, index) in project.metricLabels" :key="label" class="metric">
-          <span>{{ label }}</span>
-          <strong>{{ metrics[index] }}</strong>
+      <EventSetup />
+
+      <section v-if="store.activeEvent" class="metrics">
+        <article v-for="m in metrics" :key="m.label" class="metric" :class="{ alarm: m.warn }">
+          <span>{{ m.label }}</span>
+          <strong>{{ m.value }}</strong>
         </article>
       </section>
 
-      <section class="workspace">
-        <form class="panel" @submit.prevent="submit">
-          <h2>{{ project.formTitle }}</h2>
-          <div class="form-grid">
-            <label v-for="field in fields" :key="field.key">
-              {{ field.label }}
-              <select v-if="field.type === 'select'" v-model="form[field.key]" required>
-                <option value="">请选择</option>
-                <option v-for="option in field.options" :key="option">{{ option }}</option>
-              </select>
-              <input v-else v-model="form[field.key]" :type="field.type || 'text'" required />
-            </label>
-            <label>
-              备注
-              <textarea v-model="note" placeholder="填写处理说明或现场备注" />
-            </label>
-            <button type="submit">{{ project.primaryAction }}</button>
-          </div>
-        </form>
+      <div v-if="store.activeEvent" class="workspace">
+        <ManualDesk />
+        <ReceiptMatch />
+        <RecoveryShift />
+      </div>
 
-        <section class="list-panel">
-          <div class="toolbar">
-            <h2>{{ project.entityLabel }}列表</h2>
-            <select v-model="filter">
-              <option v-for="item in project.filters" :key="item">{{ item }}</option>
-            </select>
-          </div>
-
-          <div class="record-grid">
-            <div v-if="filteredRecords.length === 0" class="empty">暂无匹配数据</div>
-            <article v-for="record in filteredRecords" :key="record.id" class="record">
-              <div class="record-head">
-                <p class="record-title">{{ primaryText(record) }}</p>
-                <span class="status">{{ record.status }}</span>
-              </div>
-              <div class="details">
-                <span v-for="field in fields" :key="field.key">{{ field.label }}: {{ record[field.key] }}</span>
-              </div>
-              <p class="note">{{ record.notes }}</p>
-              <div class="actions">
-                <button type="button" @click="flow(record)">流转状态</button>
-                <button class="secondary" type="button" @click="navigator.clipboard?.writeText(primaryText(record))">复制摘要</button>
-                <button class="danger" type="button" @click="remove(record.id)">删除</button>
-              </div>
-            </article>
-          </div>
-
-          <div class="mini-chart">
-            <div v-for="row in chartRows" :key="row.status" class="bar">
-              <span>{{ row.status }}</span>
-              <div class="bar-track"><div class="bar-fill" :style="{ width: `${(row.value / maxChart) * 100}%` }" /></div>
-              <strong>{{ row.value }}</strong>
-            </div>
-          </div>
-        </section>
-      </section>
+      <footer v-if="store.activeEvent" class="foot">
+        <button type="button" class="secondary" @click="store.resetDemo()">重置为演示数据</button>
+        <span>数据仅保存在本机浏览器，刷新不丢失。</span>
+      </footer>
     </div>
   </main>
 </template>
+
+<style scoped>
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.metric {
+  background: #fff;
+  border: 1px solid #dfe7f1;
+  border-radius: 8px;
+  padding: 14px;
+}
+.metric.alarm {
+  border-color: #e8a49c;
+  background: #fff7f6;
+}
+.metric span {
+  display: block;
+  color: #69758c;
+  font-size: 12px;
+}
+.metric strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 26px;
+}
+.metric.alarm strong {
+  color: #b3261e;
+}
+.workspace {
+  display: grid;
+  gap: 18px;
+}
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 22px;
+  color: #98a2b5;
+  font-size: 13px;
+}
+</style>
